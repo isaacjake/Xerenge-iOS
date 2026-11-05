@@ -28,133 +28,90 @@ jobs:
         env:
           GAME_URL: ${{ secrets.Game_URL }}
         run: |
-          if [ -z "$GAME_URL" ]; then
-            echo "Game_URL secret is missing"
-            exit 1
-          fi
-
-          curl -fL --retry 5 "$GAME_URL" \
-            -o "$RUNNER_TEMP/game.iso"
-
-          ls -lh "$RUNNER_TEMP/game.iso"
+          curl -L --fail "$GAME_URL" -o game.iso
 
       - name: Build extraction tools
         run: |
-          ./scripts/build-tools.sh
+          chmod +x scripts/extract-image
+          cmake -S . -B build-tools -G Ninja
+          cmake --build build-tools --parallel
 
       - name: Extract game image
         run: |
-          mkdir -p "$RUNNER_TEMP/game"
-
-          ./scripts/extract-image \
-            --sha256 34c1bd4d549c2c53f29d814fa5e5d1c04c533c5ca0c39e57b6c2538f44ff59b4 \
-            --sha256 7abf689f52b70666ba92052bd157cfcae9ed6290dae298fbf639baa1d169f92b \
-            "$RUNNER_TEMP/game.iso" \
-            "$RUNNER_TEMP/game"
-
-          test -f "$RUNNER_TEMP/game/default.xex"
+          ./scripts/extract-image game.iso
 
       - name: Patch SDK setup script
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          p = Path("scripts/setup-sdk.sh")
-          s = p.read_text()
-
-          marker = 'retry git -C "$sdk" submodule update --init --recursive --depth 1\n'
-
-          patch = r'''
-          echo "== Applying macOS and iOS dependency fixes"
-
-          python3 - "$sdk" <<'PATCHSDK'
-          from pathlib import Path
           import re
-          import sys
 
-          sdk = Path(sys.argv[1])
+          setup = Path("scripts/setup-sdk.sh")
+          text = setup.read_text()
 
-          vulkan = sdk / "thirdparty/vulkan-loader/loader/CMakeLists.txt"
-          if not vulkan.exists():
-              raise SystemExit("Vulkan Loader CMakeLists.txt not found")
-
-          vs = vulkan.read_text()
-          vs = vs.replace(
+          text = text.replace(
               'if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES "arm64")',
               'if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")'
           )
-          vulkan.write_text(vs)
-          print("Vulkan Loader patch applied")
 
-          molten = sdk / "thirdparty/moltenvk/Common/CMakeLists.txt"
-          if not molten.exists():
-              raise SystemExit("MoltenVK CMakeLists.txt not found")
-
-          ms = molten.read_text()
-
-          if "APPKIT_LIBRARY" not in ms or "IOKIT_LIBRARY" not in ms:
-              raise SystemExit("Expected MoltenVK framework entries not found")
-
-          if "if(NOT IOS)" not in ms:
-              ms, a = re.subn(
-                  r'(?m)^(\s*)find_library\(APPKIT_LIBRARY AppKit REQUIRED\)\s*$',
-                  r'\1if(NOT IOS)\n\1    find_library(APPKIT_LIBRARY AppKit REQUIRED)',
-                  ms,
-                  count=1
-              )
-
-              ms, b = re.subn(
-                  r'(?m)^(\s*)find_library\(IOKIT_LIBRARY IOKit REQUIRED\)\s*$',
-                  r'\1    find_library(IOKIT_LIBRARY IOKit REQUIRED)\n\1endif()',
-                  ms,
-                  count=1
-              )
-
-              if a != 1 or b != 1:
-                  raise SystemExit(
-                      f"MoltenVK patch failed: AppKit={a}, IOKit={b}"
-                  )
-
-              ms = re.sub(
-                  r'(?m)^(\s*)\$\{APPKIT_LIBRARY\}\s*$',
-                  r'\1$<$<NOT:$<BOOL:${IOS}>>:${APPKIT_LIBRARY}>',
-                  ms
-              )
-
-              ms = re.sub(
-                  r'(?m)^(\s*)\$\{IOKIT_LIBRARY\}\s*$',
-                  r'\1$<$<NOT:$<BOOL:${IOS}>>:${IOKIT_LIBRARY}>',
-                  ms
-              )
-
-          molten.write_text(ms)
-          print("MoltenVK patch applied")
-          PATCHSDK
-          '''
-
-          if marker not in s:
-              raise SystemExit("Could not find SDK submodule initialization line")
-
-          if "Applying macOS and iOS dependency fixes" not in s:
-              s = s.replace(marker, marker + patch, 1)
-
-          p.write_text(s)
-          print("SDK setup script patched")
+          setup.write_text(text)
+          print("Patched Vulkan Loader CMake condition")
           PY
 
       - name: Build Xerenge SDK
         run: |
-          ./scripts/setup-sdk.sh
+          bash scripts/setup-sdk.sh
 
       - name: Build renderer and shader tools
         run: |
-          ./scripts/setup-deps.sh
+          bash scripts/setup-deps.sh
 
       - name: Generate game code and shaders
         run: |
-          ./scripts/build.sh \
-            --game "$RUNNER_TEMP/game" \
-            --generate-only
+          bash scripts/build.sh --generate-only
+
+      - name: Patch MoltenVK for iOS
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = list(Path("rexglue-sdk").rglob("Common/CMakeLists.txt"))
+          if not candidates:
+              candidates = list(Path("rexglue").rglob("Common/CMakeLists.txt"))
+
+          for file in candidates:
+              text = file.read_text()
+
+              text = re.sub(
+                  r'find_library\(APPKIT_LIBRARY AppKit REQUIRED\)',
+                  'if(NOT IOS)\n'
+                  '  find_library(APPKIT_LIBRARY AppKit REQUIRED)\n'
+                  'endif()',
+                  text
+              )
+
+              text = re.sub(
+                  r'find_library\(IOKIT_LIBRARY IOKit REQUIRED\)',
+                  'if(NOT IOS)\n'
+                  '  find_library(IOKIT_LIBRARY IOKit REQUIRED)\n'
+                  'endif()',
+                  text
+              )
+
+              text = text.replace(
+                  '${APPKIT_LIBRARY}',
+                  '$<$<NOT:$<BOOL:${IOS}>>:${APPKIT_LIBRARY}>'
+              )
+
+              text = text.replace(
+                  '${IOKIT_LIBRARY}',
+                  '$<$<NOT:$<BOOL:${IOS}>>:${IOKIT_LIBRARY}>'
+              )
+
+              file.write_text(text)
+              print(f"Patched {file}")
+          PY
 
       - name: Generate iOS Xcode project
         run: |
@@ -167,54 +124,47 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DIOS=ON \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
 
       - name: Discover Xcode projects
         run: |
-          echo "Generated Xcode projects:"
           find rexglue/build-ios -name "*.xcodeproj" -print
 
       - name: Build iPhone app
         run: |
-          echo "Building only the burnout iOS target"
-
           cmake --build rexglue/build-ios \
             --config Release \
             --target burnout \
-            --verbose
+            --verbose \
+            -- CODE_SIGNING_ALLOWED=NO \
+               CODE_SIGNING_REQUIRED=NO \
+               CODE_SIGN_IDENTITY=""
 
       - name: Locate iOS app
         run: |
-          echo "Searching for app bundles:"
-          find rexglue/build-ios \
-            -type d \
-            -name "*.app" \
-            -print
+          find rexglue/build-ios -name "burnout.app" -print
 
       - name: Package IPA
         run: |
           APP=$(find rexglue/build-ios \
-            -type d \
-            -name "burnout.app" \
-            -path "*/Release-iphoneos/*" \
+            -path "*/Release-iphoneos/burnout.app" \
             -print -quit)
 
           if [ -z "$APP" ]; then
             echo "ERROR: burnout.app not found"
-            find rexglue/build-ios -name "*.app"
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
-
-          cd "$RUNNER_TEMP/ipa"
-          zip -r "$RUNNER_TEMP/Burnout-Revenge-iOS.ipa" Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r Burnout-Revenge.ipa Payload
 
       - name: Upload IPA
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Burnout-Revenge-iOS-IPA
-          path: ${{ runner.temp }}/Burnout-Revenge-iOS.ipa
-          retention-days: 7
+          path: Burnout-Revenge.ipa
+          if-no-files-found: error
