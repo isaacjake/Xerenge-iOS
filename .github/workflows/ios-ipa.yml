@@ -32,19 +32,21 @@ jobs:
 
       - name: Build extraction tools
         run: |
-          chmod +x scripts/extract-image
-          cmake -S . -B build-tools -G Ninja
-          cmake --build build-tools --parallel
+          chmod +x scripts/build-tools.sh
+          bash scripts/build-tools.sh
 
       - name: Extract game image
         run: |
-          ./scripts/extract-image game.iso
+          chmod +x scripts/extract-image
+          ./scripts/extract-image \
+            --sha256 34c1bd4d549c2c53f29d814fa5e5d1c04c533c5ca0c39e57b6c2538f44ff59b4 \
+            --sha256 7abf689f52b70666ba92052bd157cfcae9ed6290dae298fbf639baa1d169f92b \
+            game.iso game
 
       - name: Patch SDK setup script
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           setup = Path("scripts/setup-sdk.sh")
           text = setup.read_text()
@@ -68,7 +70,7 @@ jobs:
 
       - name: Generate game code and shaders
         run: |
-          bash scripts/build.sh --generate-only
+          bash scripts/build.sh --game game --generate-only
 
       - name: Patch MoltenVK for iOS
         run: |
@@ -128,10 +130,6 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
-
-      - name: Discover Xcode projects
-        run: |
-          find rexglue/build-ios -name "*.xcodeproj" -print
 
       - name: Build iPhone app
         run: |
