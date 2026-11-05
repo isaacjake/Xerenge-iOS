@@ -1,4 +1,3 @@
-
 name: Build Xerenge iOS IPA
 
 on:
@@ -53,6 +52,39 @@ jobs:
             "$RUNNER_TEMP/game"
 
           test -f "$RUNNER_TEMP/game/default.xex"
+
+      - name: Patch SDK setup for macOS
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("scripts/setup-sdk.sh")
+          s = p.read_text()
+
+          marker = 'retry git -C "$sdk" submodule update --init --recursive --depth 1\n'
+
+          patch = '''
+          echo "== patching Vulkan Loader CMake condition for macOS"
+          VULKAN_CMAKE="$sdk/thirdparty/vulkan-loader/loader/CMakeLists.txt"
+
+          if [ ! -f "$VULKAN_CMAKE" ]; then
+              echo "Vulkan Loader CMakeLists.txt not found"
+              exit 1
+          fi
+
+          sed -i '' 's/if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES "arm64")/if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")/' "$VULKAN_CMAKE"
+
+          grep -n 'if(WIN32 AND' "$VULKAN_CMAKE"
+          '''
+
+          if marker not in s:
+              raise SystemExit("Could not find SDK submodule initialization line")
+
+          if "patching Vulkan Loader CMake condition" not in s:
+              s = s.replace(marker, marker + patch, 1)
+
+          p.write_text(s)
+          PY
 
       - name: Build Xerenge SDK
         run: |
