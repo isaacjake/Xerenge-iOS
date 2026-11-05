@@ -1,0 +1,135 @@
+
+name: Build Xerenge iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake ninja pkgconf
+
+      - name: Initialize submodules
+        run: |
+          git submodule update --init --recursive
+
+      - name: Download game image
+        env:
+          GAME_URL: ${{ secrets.Game_URL }}
+        run: |
+          if [ -z "$GAME_URL" ]; then
+            echo "Game_URL secret is missing"
+            exit 1
+          fi
+
+          curl -fL --retry 5 "$GAME_URL" \
+            -o "$RUNNER_TEMP/game.iso"
+
+          ls -lh "$RUNNER_TEMP/game.iso"
+
+      - name: Build extraction tools
+        run: |
+          ./scripts/build-tools.sh
+
+      - name: Extract game image
+        run: |
+          mkdir -p "$RUNNER_TEMP/game"
+
+          ./scripts/extract-image \
+            --sha256 34c1bd4d549c2c53f29d814fa5e5d1c04c533c5ca0c39e57b6c2538f44ff59b4 \
+            --sha256 7abf689f52b70666ba92052bd157cfcae9ed6290dae298fbf639baa1d169f92b \
+            "$RUNNER_TEMP/game.iso" \
+            "$RUNNER_TEMP/game"
+
+          test -f "$RUNNER_TEMP/game/default.xex"
+
+      - name: Build Xerenge SDK
+        run: |
+          ./scripts/setup-sdk.sh
+
+      - name: Build renderer and shader tools
+        run: |
+          ./scripts/setup-deps.sh
+
+      - name: Generate game code and shaders
+        run: |
+          ./scripts/build.sh \
+            --game "$RUNNER_TEMP/game" \
+            --generate-only
+
+      - name: Generate iOS Xcode project
+        run: |
+          cmake -S rexglue \
+            -B rexglue/build-ios \
+            -G Xcode \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/rexglue-sdk" \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DIOS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+
+          find rexglue/build-ios \
+            -maxdepth 2 \
+            -name "*.xcodeproj" -print
+
+      - name: Build iPhone app
+        run: |
+          PROJECT=$(find rexglue/build-ios \
+            -maxdepth 2 \
+            -name "*.xcodeproj" \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "Xcode project was not generated"
+            exit 1
+          fi
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme burnout \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          APP=$(find rexglue/build-ios \
+            -type d \
+            -name "burnout.app" \
+            -path "*/Release-iphoneos/*" \
+            -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo "iOS app bundle not found"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+
+          cd "$RUNNER_TEMP/ipa"
+          zip -r "$RUNNER_TEMP/Burnout-Revenge-iOS.ipa" Payload
+
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Burnout-Revenge-iOS-IPA
+          path: ${{ runner.temp }}/Burnout-Revenge-iOS.ipa
+          retention-days: 7
