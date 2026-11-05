@@ -73,7 +73,6 @@ jobs:
           fi
 
           sed -i '' 's/if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES "arm64")/if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")/' "$VULKAN_CMAKE"
-
           grep -n 'if(WIN32 AND' "$VULKAN_CMAKE"
           '''
 
@@ -94,6 +93,62 @@ jobs:
         run: |
           ./scripts/setup-deps.sh
 
+      - name: Patch MoltenVK for iOS
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("rexglue-sdk/thirdparty/moltenvk/Common/CMakeLists.txt")
+          s = p.read_text()
+
+          old = """find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
+          find_library(METAL_LIBRARY Metal REQUIRED)
+          find_library(APPKIT_LIBRARY AppKit REQUIRED)
+          find_library(IOKIT_LIBRARY IOKit REQUIRED)
+          find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
+          find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
+          target_link_libraries(MoltenVK_Common PUBLIC
+              ${FOUNDATION_LIBRARY}
+              ${METAL_LIBRARY}
+              ${APPKIT_LIBRARY}
+              ${IOKIT_LIBRARY}
+              ${IOSURFACE_LIBRARY}
+              ${QUARTZCORE_LIBRARY}
+          )
+          """
+
+          new = """find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
+          find_library(METAL_LIBRARY Metal REQUIRED)
+          find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
+          find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
+
+          target_link_libraries(MoltenVK_Common PUBLIC
+              ${FOUNDATION_LIBRARY}
+              ${METAL_LIBRARY}
+              ${IOSURFACE_LIBRARY}
+              ${QUARTZCORE_LIBRARY}
+          )
+
+          if(NOT IOS)
+              find_library(APPKIT_LIBRARY AppKit REQUIRED)
+              find_library(IOKIT_LIBRARY IOKit REQUIRED)
+              target_link_libraries(MoltenVK_Common PUBLIC
+                  ${APPKIT_LIBRARY}
+                  ${IOKIT_LIBRARY}
+              )
+          endif()
+          """
+
+          if old in s:
+              s = s.replace(old, new, 1)
+              p.write_text(s)
+              print("MoltenVK iOS framework fix applied")
+          elif "if(NOT IOS)" in s and "APPKIT_LIBRARY" in s:
+              print("MoltenVK framework fix already present")
+          else:
+              raise SystemExit("MoltenVK CMake block did not match; stopping safely")
+          PY
+
       - name: Generate game code and shaders
         run: |
           ./scripts/build.sh \
@@ -112,10 +167,6 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DIOS=ON \
             -DCMAKE_BUILD_TYPE=Release
-
-          find rexglue/build-ios \
-            -maxdepth 2 \
-            -name "*.xcodeproj" -print
 
       - name: Build iPhone app
         run: |
