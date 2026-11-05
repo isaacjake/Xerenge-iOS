@@ -169,42 +169,54 @@ jobs:
             -DIOS=ON \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: List Xcode targets
+      - name: Discover Xcode projects
         run: |
-          PROJECT=$(find rexglue/build-ios \
-            -maxdepth 2 \
-            -name "*.xcodeproj" \
-            -print -quit)
+          echo "All generated Xcode projects:"
+          find rexglue/build-ios -name "*.xcodeproj" -print
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: Xcode project was not generated"
-            exit 1
-          fi
+          echo "Listing Xcode project contents:"
+          find rexglue/build-ios -maxdepth 5 \
+            \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) \
+            -print
 
-          echo "Generated project: $PROJECT"
-          xcodebuild -list -project "$PROJECT"
+      - name: List Xcode project targets
+        run: |
+          while IFS= read -r PROJECT; do
+            echo "===================================="
+            echo "PROJECT: $PROJECT"
+            xcodebuild -list -project "$PROJECT" || true
+          done < <(find rexglue/build-ios -name "*.xcodeproj" -print)
 
       - name: Build iPhone app
         run: |
           PROJECT=$(find rexglue/build-ios \
-            -maxdepth 2 \
             -name "*.xcodeproj" \
             -print -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: Xcode project was not generated"
+            echo "ERROR: No Xcode project found"
             exit 1
           fi
 
+          echo "Building project: $PROJECT"
+
           xcodebuild \
             -project "$PROJECT" \
-            -target burnout \
+            -alltargets \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
+
+      - name: Locate iOS app
+        run: |
+          echo "Searching for app bundles..."
+          find rexglue/build-ios \
+            -type d \
+            -name "*.app" \
+            -print
 
       - name: Package IPA
         run: |
@@ -215,7 +227,7 @@ jobs:
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: iOS app bundle not found"
+            echo "ERROR: burnout.app not found"
             find rexglue/build-ios -name "*.app"
             exit 1
           fi
