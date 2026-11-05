@@ -37,7 +37,6 @@ jobs:
 
       - name: Extract game image
         run: |
-          chmod +x scripts/extract-image
           ./scripts/extract-image \
             --sha256 34c1bd4d549c2c53f29d814fa5e5d1c04c533c5ca0c39e57b6c2538f44ff59b4 \
             --sha256 7abf689f52b70666ba92052bd157cfcae9ed6290dae298fbf639baa1d169f92b \
@@ -51,13 +50,35 @@ jobs:
           setup = Path("scripts/setup-sdk.sh")
           text = setup.read_text()
 
-          text = text.replace(
-              'if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES "arm64")',
-              'if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")'
-          )
+          marker = 'echo "== building the SDK"\ncmake --preset'
+          patch = '''echo "== patching Vulkan Loader CMake condition"
+          python3 - "$sdk/thirdparty/vulkan-loader/loader/CMakeLists.txt" <<'PATCH'
+          from pathlib import Path
+          import sys
 
-          setup.write_text(text)
-          print("Patched Vulkan Loader CMake condition")
+          file = Path(sys.argv[1])
+          text = file.read_text()
+          old = 'if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES "arm64")'
+          new = 'if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")'
+
+          if old in text:
+              text = text.replace(old, new)
+              file.write_text(text)
+              print("Vulkan Loader condition patched")
+          elif new in text:
+              print("Vulkan Loader condition already patched")
+          else:
+              raise SystemExit("Vulkan Loader condition not found")
+          PATCH
+
+          echo "== building the SDK"
+          cmake --preset'''
+
+          if marker not in text:
+              raise SystemExit("Could not find SDK build marker")
+
+          setup.write_text(text.replace(marker, patch))
+          print("Inserted Vulkan Loader patch into setup-sdk.sh")
           PY
 
       - name: Build Xerenge SDK
