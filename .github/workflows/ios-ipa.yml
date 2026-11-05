@@ -171,48 +171,21 @@ jobs:
 
       - name: Discover Xcode projects
         run: |
-          echo "All generated Xcode projects:"
+          echo "Generated Xcode projects:"
           find rexglue/build-ios -name "*.xcodeproj" -print
-
-          echo "Listing Xcode project contents:"
-          find rexglue/build-ios -maxdepth 5 \
-            \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) \
-            -print
-
-      - name: List Xcode project targets
-        run: |
-          while IFS= read -r PROJECT; do
-            echo "===================================="
-            echo "PROJECT: $PROJECT"
-            xcodebuild -list -project "$PROJECT" || true
-          done < <(find rexglue/build-ios -name "*.xcodeproj" -print)
 
       - name: Build iPhone app
         run: |
-          PROJECT=$(find rexglue/build-ios \
-            -name "*.xcodeproj" \
-            -print -quit)
+          echo "Building only the burnout iOS target"
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No Xcode project found"
-            exit 1
-          fi
-
-          echo "Building project: $PROJECT"
-
-          xcodebuild \
-            -project "$PROJECT" \
-            -alltargets \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
+          cmake --build rexglue/build-ios \
+            --config Release \
+            --target burnout \
+            --verbose
 
       - name: Locate iOS app
         run: |
-          echo "Searching for app bundles..."
+          echo "Searching for app bundles:"
           find rexglue/build-ios \
             -type d \
             -name "*.app" \
