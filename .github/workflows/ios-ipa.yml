@@ -74,9 +74,7 @@ jobs:
 
           sdk = Path(sys.argv[1])
 
-          # Fix Vulkan Loader empty SYSTEM_PROCESSOR condition.
           vulkan = sdk / "thirdparty/vulkan-loader/loader/CMakeLists.txt"
-
           if not vulkan.exists():
               raise SystemExit("Vulkan Loader CMakeLists.txt not found")
 
@@ -86,12 +84,9 @@ jobs:
               'if(WIN32 AND "${SYSTEM_PROCESSOR}" MATCHES "arm64")'
           )
           vulkan.write_text(vs)
-
           print("Vulkan Loader patch applied")
 
-          # Avoid requiring macOS-only frameworks when configuring iOS.
           molten = sdk / "thirdparty/moltenvk/Common/CMakeLists.txt"
-
           if not molten.exists():
               raise SystemExit("MoltenVK CMakeLists.txt not found")
 
@@ -161,13 +156,6 @@ jobs:
             --game "$RUNNER_TEMP/game" \
             --generate-only
 
-      - name: Verify generated files
-        run: |
-          echo "Checking generated build files..."
-          find . -maxdepth 4 \
-            \( -name "*.cpp" -o -name "*.h" -o -name "*.metal" \) \
-            | head -100
-
       - name: Generate iOS Xcode project
         run: |
           cmake -S rexglue \
@@ -180,6 +168,21 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DIOS=ON \
             -DCMAKE_BUILD_TYPE=Release
+
+      - name: List Xcode targets
+        run: |
+          PROJECT=$(find rexglue/build-ios \
+            -maxdepth 2 \
+            -name "*.xcodeproj" \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Xcode project was not generated"
+            exit 1
+          fi
+
+          echo "Generated project: $PROJECT"
+          xcodebuild -list -project "$PROJECT"
 
       - name: Build iPhone app
         run: |
@@ -195,7 +198,7 @@ jobs:
 
           xcodebuild \
             -project "$PROJECT" \
-            -scheme burnout \
+            -target burnout \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
@@ -213,6 +216,7 @@ jobs:
 
           if [ -z "$APP" ]; then
             echo "ERROR: iOS app bundle not found"
+            find rexglue/build-ios -name "*.app"
             exit 1
           fi
 
